@@ -1,7 +1,7 @@
 #include "llbxcan_declarations.h"
 
 // kbps multiplied by 10
-const uint32_t speeds[SPEEDS_ARRAY_SIZE] = {100U, 200U, 500U, 1000U, 1250U, 2500U, 5000U, 10000U};
+const uint32_t speeds[SPEEDS_ARRAY_SIZE] = {100U, 200U, 500U, 1000U, 1250U, 2500U, 5000U, 8000U, 10000U};
 const uint32_t data_speeds[DATA_SPEEDS_ARRAY_SIZE] = {0U}; // No separate data speed, dummy
 
 bool llcan_set_speed(CAN_TypeDef *CANx, uint32_t speed, bool loopback, bool silent) {
@@ -23,11 +23,19 @@ bool llcan_set_speed(CAN_TypeDef *CANx, uint32_t speed, bool loopback, bool sile
   }
 
   if(ret){
-    // set time quanta from defines
-    register_set(&(CANx->BTR), ((CAN_BTR_TS1_0 * (CAN_SEQ1-1U)) |
+    if (speed == 8000U){
+      // 800kbps
+      register_set(&(CANx->BTR), ((CAN_BTR_TS1_0 * 9U) |
+                                   (CAN_BTR_TS2_0 * 2U) |
+                                   (CAN_BTR_SJW_0 * 2U) |
+                                   5, 0xC37F03FFU);
+    } else {
+      // set time quanta from defines
+      register_set(&(CANx->BTR), ((CAN_BTR_TS1_0 * (CAN_SEQ1-1U)) |
                                    (CAN_BTR_TS2_0 * (CAN_SEQ2-1U)) |
                                    (CAN_BTR_SJW_0 * (CAN_SJW-1U)) |
                                    (can_speed_to_prescaler(speed) - 1U)), 0xC37F03FFU);
+    }
 
     // silent loopback mode for debugging
     if (loopback) {
