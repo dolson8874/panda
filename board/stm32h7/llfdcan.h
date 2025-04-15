@@ -76,6 +76,14 @@ bool llcan_set_speed(FDCAN_GlobalTypeDef *FDCANx, uint32_t speed, uint32_t data_
     uint32_t seg2 = CAN_SEG2(tq, sp);
     uint8_t sjw = MIN(127U, seg2);
 
+    if (speed == 8000U){
+      prescaler = 10;
+      tq = 10;
+      seg1 = 7;
+      seg2 = 2;
+      sjw = 1;
+    }
+
     FDCANx->NBTP = (((sjw & 0x7FUL)-1U)<<FDCAN_NBTP_NSJW_Pos) | (((seg1 & 0xFFU)-1U)<<FDCAN_NBTP_NTSEG1_Pos) | (((seg2 & 0x7FU)-1U)<<FDCAN_NBTP_NTSEG2_Pos) | (((prescaler & 0x1FFUL)-1U)<<FDCAN_NBTP_NBRP_Pos);
 
     // Set the data bit timing values
