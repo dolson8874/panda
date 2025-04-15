@@ -28,7 +28,7 @@ bool llcan_set_speed(CAN_TypeDef *CANx, uint32_t speed, bool loopback, bool sile
       register_set(&(CANx->BTR), ((CAN_BTR_TS1_0 * 9U) |
                                    (CAN_BTR_TS2_0 * 2U) |
                                    (CAN_BTR_SJW_0 * 2U) |
-                                   5, 0xC37F03FFU);
+                                   5), 0xC37F03FFU);
     } else {
       // set time quanta from defines
       register_set(&(CANx->BTR), ((CAN_BTR_TS1_0 * (CAN_SEQ1-1U)) |
