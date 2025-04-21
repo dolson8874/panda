@@ -17,6 +17,7 @@ def colorize_errors(value):
 if __name__ == "__main__":
 
   panda = Panda()
+  #panda.set_can_speed_kbps(1, 800)
   while True:
     print(chr(27) + "[2J") # clear screen
     print("Connected to " + ("internal panda" if panda.is_internal() else "External panda") + f" id: {panda.get_serial()[0]}: {panda.get_version()}")
