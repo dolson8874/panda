@@ -216,9 +216,14 @@ class Panda:
     for bus in range(PANDA_CAN_CNT):
       self.set_canfd_auto(bus, False)
 
+    # use default speed dolson
+    # LANDROVER CAN1 800kbps
     # set CAN speed
-    for bus in range(PANDA_CAN_CNT):
-      self.set_can_speed_kbps(bus, self._can_speed_kbps)
+    for bus in range(PANDA_BUS_CNT):
+      if bus == 1:
+        self.set_can_speed_kbps(bus, 800)
+      else:
+        self.set_can_speed_kbps(bus, self._can_speed_kbps)
 
   @property
   def spi(self) -> bool:

@@ -1,7 +1,8 @@
 #include "llfdcan_declarations.h"
 
 // kbps multiplied by 10
-const uint32_t speeds[SPEEDS_ARRAY_SIZE] = {100U, 200U, 500U, 1000U, 1250U, 2500U, 5000U, 8000U, 10000U};
+//const uint32_t speeds[SPEEDS_ARRAY_SIZE] = {100U, 200U, 500U, 1000U, 1250U, 2500U, 5000U, 8000U, 10000U};
+const uint32_t speeds[SPEEDS_ARRAY_SIZE] = {100U, 200U, 500U, 1000U, 1250U, 2500U, 5000U, 8000U, 10000U}; // dolson LANDROVER CAN1 800kbps
 const uint32_t data_speeds[DATA_SPEEDS_ARRAY_SIZE] = {100U, 200U, 500U, 1000U, 1250U, 2500U, 5000U, 10000U, 20000U, 50000U};
 
 static bool fdcan_request_init(FDCAN_GlobalTypeDef *FDCANx) {
@@ -76,6 +77,7 @@ bool llcan_set_speed(FDCAN_GlobalTypeDef *FDCANx, uint32_t speed, uint32_t data_
     uint32_t seg2 = CAN_SEG2(tq, sp);
     uint8_t sjw = MIN(127U, seg2);
 
+    // dolson LANDROVER CAN1 800Kbps
     if (speed == 8000U){
       prescaler = 10;
       tq = 10;
