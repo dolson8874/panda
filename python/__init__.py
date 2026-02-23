@@ -23,7 +23,7 @@ __version__ = '0.0.10'
 CANPACKET_HEAD_SIZE = 0x6
 DLC_TO_LEN = [0, 1, 2, 3, 4, 5, 6, 7, 8, 12, 16, 20, 24, 32, 48, 64]
 LEN_TO_DLC = {length: dlc for (dlc, length) in enumerate(DLC_TO_LEN)}
-PANDA_BUS_CNT = 3
+PANDA_CAN_CNT = 3
 
 
 def calculate_checksum(data):
@@ -32,16 +32,13 @@ def calculate_checksum(data):
     res ^= b
   return res
 
-def pack_can_buffer(arr, fd=False):
-  snds = [b'']
+def pack_can_buffer(arr, chunk=False, fd=False):
+  snds = [bytearray(), ]
   for address, dat, bus in arr:
-    assert len(dat) in LEN_TO_DLC
-    #logger.debug("  W 0x%x: 0x%s", address, dat.hex())
-
     extended = 1 if address >= 0x800 else 0
     data_len_code = LEN_TO_DLC[len(dat)]
     header = bytearray(CANPACKET_HEAD_SIZE)
-    word_4b = address << 3 | extended << 2
+    word_4b = (address << 3) | (extended << 2)
     header[0] = (data_len_code << 4) | (bus << 1) | int(fd)
     header[1] = word_4b & 0xFF
     header[2] = (word_4b >> 8) & 0xFF
@@ -49,9 +46,10 @@ def pack_can_buffer(arr, fd=False):
     header[4] = (word_4b >> 24) & 0xFF
     header[5] = calculate_checksum(header[:5] + dat)
 
-    snds[-1] += header + dat
-    if len(snds[-1]) > 256: # Limit chunks to 256 bytes
-      snds.append(b'')
+    snds[-1].extend(header)
+    snds[-1].extend(dat)
+    if chunk and len(snds[-1]) > 256:
+      snds.append(bytearray())
 
   return snds
 
@@ -105,9 +103,6 @@ ensure_health_packet_version = partial(ensure_version, "health", "HEALTH_PACKET_
 class Panda:
 
   SERIAL_DEBUG = 0
-  SERIAL_ESP = 1
-  SERIAL_LIN1 = 2
-  SERIAL_LIN2 = 3
   SERIAL_SOM_DEBUG = 4
 
   USB_VIDS = (0xbbaa, 0x3801)  # 0x3801 is comma's registered VID
@@ -115,36 +110,23 @@ class Panda:
   REQUEST_IN = usb1.ENDPOINT_IN | usb1.TYPE_VENDOR | usb1.RECIPIENT_DEVICE
   REQUEST_OUT = usb1.ENDPOINT_OUT | usb1.TYPE_VENDOR | usb1.RECIPIENT_DEVICE
 
+  # from https://github.com/commaai/openpilot/blob/103b4df18cbc38f4129555ab8b15824d1a672bdf/cereal/log.capnp#L648
   HW_TYPE_UNKNOWN = b'\x00'
-  HW_TYPE_WHITE_PANDA = b'\x01'
-  HW_TYPE_GREY_PANDA = b'\x02'
-  HW_TYPE_BLACK_PANDA = b'\x03'
-  HW_TYPE_PEDAL = b'\x04'
-  HW_TYPE_UNO = b'\x05'
-  HW_TYPE_DOS = b'\x06'
   HW_TYPE_RED_PANDA = b'\x07'
-  HW_TYPE_RED_PANDA_V2 = b'\x08'
   HW_TYPE_TRES = b'\x09'
   HW_TYPE_CUATRO = b'\x0a'
+  HW_TYPE_BODY = b'\xb1'
 
   CAN_PACKET_VERSION = 4
-  HEALTH_PACKET_VERSION = 16
+  HEALTH_PACKET_VERSION = 17
   CAN_HEALTH_PACKET_VERSION = 5
-  HEALTH_STRUCT = struct.Struct("<IIIIIIIIBBBBBHBBBHfBBHBHHB")
+  HEALTH_STRUCT = struct.Struct("<IIIIIIIIBBBBBHBBBHfBBHHHB")
   CAN_HEALTH_STRUCT = struct.Struct("<BIBBBBBBBBIIIIIIIHHBBBIIII")
 
-  F4_DEVICES = [HW_TYPE_WHITE_PANDA, HW_TYPE_GREY_PANDA, HW_TYPE_BLACK_PANDA, HW_TYPE_UNO, HW_TYPE_DOS]
-  H7_DEVICES = [HW_TYPE_RED_PANDA, HW_TYPE_RED_PANDA_V2, HW_TYPE_TRES, HW_TYPE_CUATRO]
+  H7_DEVICES = [HW_TYPE_RED_PANDA, HW_TYPE_TRES, HW_TYPE_CUATRO, HW_TYPE_BODY]
+  SUPPORTED_DEVICES = H7_DEVICES
 
-  INTERNAL_DEVICES = (HW_TYPE_UNO, HW_TYPE_DOS, HW_TYPE_TRES, HW_TYPE_CUATRO)
-  HAS_OBD = (HW_TYPE_BLACK_PANDA, HW_TYPE_UNO, HW_TYPE_DOS, HW_TYPE_RED_PANDA, HW_TYPE_RED_PANDA_V2, HW_TYPE_TRES, HW_TYPE_CUATRO)
-
-  MAX_FAN_RPMs = {
-    HW_TYPE_UNO: 5100,
-    HW_TYPE_DOS: 6500,
-    HW_TYPE_TRES: 6600,
-    HW_TYPE_CUATRO: 12500,
-  }
+  INTERNAL_DEVICES = (HW_TYPE_TRES, HW_TYPE_CUATRO)
 
   HARNESS_STATUS_NC = 0
   HARNESS_STATUS_NORMAL = 1
@@ -159,11 +141,10 @@ class Panda:
     self._can_speed_kbps = can_speed_kbps
 
     if cli and serial is None:
-        self._connect_serial = self._cli_select_panda()
+      self._connect_serial = self._cli_select_panda()
     else:
-        self._connect_serial = serial
+      self._connect_serial = serial
 
-    # connect and set mcu type
     self.connect(claim)
 
   def _cli_select_panda(self):
@@ -208,36 +189,18 @@ class Panda:
     self._handle = None
     while self._handle is None:
       # try USB first, then SPI
-      self._context, self._handle, serial, self.bootstub, bcd = self.usb_connect(self._connect_serial, claim=claim, no_error=wait)
+      self._context, self._handle, serial, self.bootstub = self.usb_connect(self._connect_serial, claim=claim, no_error=wait)
       if self._handle is None:
-        self._context, self._handle, serial, self.bootstub, bcd = self.spi_connect(self._connect_serial)
+        self._context, self._handle, serial, self.bootstub = self.spi_connect(self._connect_serial)
       if not wait:
         break
 
     if self._handle is None:
       raise Exception("failed to connect to panda")
 
-    # Some fallback logic to determine panda and MCU type for old bootstubs,
-    # since we now support multiple MCUs and need to know which fw to flash.
-    # Three cases to consider:
-    # A) oldest bootstubs don't have any way to distinguish
-    #    MCU or panda type
-    # B) slightly newer (~2 weeks after first C3's built) bootstubs
-    #    have the panda type set in the USB bcdDevice
-    # C) latest bootstubs also implement the endpoint for panda type
-    self._bcd_hw_type = None
-    ret = self._handle.controlRead(Panda.REQUEST_IN, 0xc1, 0, 0, 0x40)
-    missing_hw_type_endpoint = self.bootstub and ret.startswith(b'\xff\x00\xc1\x3e\xde\xad\xd0\x0d')
-    if missing_hw_type_endpoint and bcd is not None:
-      self._bcd_hw_type = bcd
-
-    # For case A, we assume F4 MCU type, since all H7 pandas should be case B at worst
-    self._assume_f4_mcu = (self._bcd_hw_type is None) and missing_hw_type_endpoint
-
     self._serial = serial
     self._connect_serial = serial
     self._handle_open = True
-    self._mcu_type = self.get_mcu_type()
     self.health_version, self.can_version, self.can_health_version = self.get_packets_versions()
     logger.debug("connected")
 
@@ -250,14 +213,12 @@ class Panda:
     self.can_reset_communications()
 
     # disable automatic CAN-FD switching
-    for bus in range(PANDA_BUS_CNT):
+    for bus in range(PANDA_CAN_CNT):
       self.set_canfd_auto(bus, False)
 
-    # use default speed
-    # no need set can speed
-    # set CAN speed 
-    #for bus in range(PANDA_BUS_CNT):
-    #  self.set_can_speed_kbps(bus, self._can_speed_kbps)
+    # set CAN speed
+    for bus in range(PANDA_CAN_CNT):
+      self.set_can_speed_kbps(bus, self._can_speed_kbps)
 
   @property
   def spi(self) -> bool:
@@ -265,49 +226,33 @@ class Panda:
 
   @classmethod
   def spi_connect(cls, serial, ignore_version=False):
-    # get UID to confirm slave is present and up
-    handle = None
-    spi_serial = None
-    bootstub = None
-    spi_version = None
     try:
       handle = PandaSpiHandle()
-
-      # connect by protcol version
-      try:
-        dat = handle.get_protocol_version()
-        spi_serial = binascii.hexlify(dat[:12]).decode()
-        pid = dat[13]
-        if pid not in (0xcc, 0xee):
-          raise PandaSpiException("invalid bootstub status")
-        bootstub = pid == 0xee
-        spi_version = dat[14]
-      except PandaSpiException:
-        # fallback, we'll raise a protocol mismatch below
-        dat = handle.controlRead(Panda.REQUEST_IN, 0xc3, 0, 0, 12, timeout=100)
-        spi_serial = binascii.hexlify(dat).decode()
-        bootstub = Panda.flasher_present(handle)
-        spi_version = 0
+      dat = handle.get_protocol_version()
     except PandaSpiException:
-      pass
+      return None, None, None, False
 
-    # no connection or wrong panda
-    if None in (spi_serial, bootstub) or (serial is not None and (spi_serial != serial)):
-      handle = None
-      spi_serial = None
-      bootstub = False
+    spi_serial = binascii.hexlify(dat[:12]).decode()
+    pid = dat[13]
+    if pid not in (0xcc, 0xee):
+      raise PandaProtocolMismatch(f"invalid bootstub status ({pid=}). reflash panda")
+    bootstub = pid == 0xee
+    spi_version = dat[14]
+
+    # did we get the right panda?
+    if serial is not None and spi_serial != serial:
+      return None, None, None, False
 
     # ensure our protocol version matches the panda
-    if handle is not None and not ignore_version:
-      if spi_version != handle.PROTOCOL_VERSION:
-        err = f"panda protocol mismatch: expected {handle.PROTOCOL_VERSION}, got {spi_version}. reflash panda"
-        raise PandaProtocolMismatch(err)
+    if (not ignore_version) and spi_version != handle.PROTOCOL_VERSION:
+      raise PandaProtocolMismatch(f"panda protocol mismatch: expected {handle.PROTOCOL_VERSION}, got {spi_version}. reflash panda")
 
-    return None, handle, spi_serial, bootstub, None
+    # got a device and all good
+    return None, handle, spi_serial, bootstub
 
   @classmethod
   def usb_connect(cls, serial, claim=True, no_error=False):
-    handle, usb_serial, bootstub, bcd = None, None, None, None
+    handle, usb_serial, bootstub = None, None, None
     context = usb1.USBContext()
     context.open()
     try:
@@ -329,14 +274,9 @@ class Panda:
             handle = device.open()
             if sys.platform not in ("win32", "cygwin", "msys", "darwin"):
               handle.setAutoDetachKernelDriver(True)
-            if claim:
+            if claim or sys.platform == "darwin":
               handle.claimInterface(0)
               # handle.setInterfaceAltSetting(0, 0)  # Issue in USB stack
-
-            # bcdDevice wasn't always set to the hw type, ignore if it's the old constant
-            this_bcd = device.getbcdDevice()
-            if this_bcd is not None and this_bcd != 0x2300:
-              bcd = bytearray([this_bcd >> 8, ])
 
             break
     except Exception:
@@ -348,7 +288,7 @@ class Panda:
     else:
       context.close()
 
-    return context, usb_handle, usb_serial, bootstub, bcd
+    return context, usb_handle, usb_serial, bootstub
 
   def is_connected_spi(self):
     return isinstance(self._handle, PandaSpiHandle)
@@ -357,9 +297,10 @@ class Panda:
     return isinstance(self._handle, PandaUsbHandle)
 
   @classmethod
-  def list(cls):
+  def list(cls, usb_only: bool = False):
     ret = cls.usb_list()
-    ret += cls.spi_list()
+    if not usb_only:
+      ret += cls.spi_list()
     return list(set(ret))
 
   @classmethod
@@ -383,12 +324,15 @@ class Panda:
 
   @classmethod
   def spi_list(cls):
-    _, _, serial, _, _ = cls.spi_connect(None, ignore_version=True)
+    _, _, serial, _ = cls.spi_connect(None, ignore_version=True)
     if serial is not None:
       return [serial, ]
     return []
 
   def reset(self, enter_bootstub=False, enter_bootloader=False, reconnect=True):
+    if enter_bootstub or enter_bootloader:
+      assert (hw_type := self.get_type()) in self.SUPPORTED_DEVICES, f"Unknown HW: {hw_type}"
+
     # no response is expected since it resets right away
     timeout = 5000 if isinstance(self._handle, PandaSpiHandle) else 15000
     try:
@@ -455,7 +399,7 @@ class Panda:
       handle.controlWrite(Panda.REQUEST_IN, 0xb2, i, 0, b'')
 
     # flash over EP2
-    STEP = 0x10
+    STEP = 0x200
     logger.info("flash: flashing")
     for i in range(0, len(code), STEP):
       handle.bulkWrite(2, code[i:i + STEP])
@@ -468,12 +412,14 @@ class Panda:
       pass
 
   def flash(self, fn=None, code=None, reconnect=True):
+    assert (hw_type := self.get_type()) in self.SUPPORTED_DEVICES, f"Unknown HW: {hw_type}"
+
     if self.up_to_date(fn=fn):
       logger.info("flash: already up to date")
       return
 
     if not fn:
-      fn = os.path.join(FW_PATH, self._mcu_type.config.app_fn)
+      fn = os.path.join(FW_PATH, McuType.H7.config.app_fn)
     assert os.path.isfile(fn)
     logger.debug("flash: main version is %s", self.get_version())
     if not self.bootstub:
@@ -488,7 +434,7 @@ class Panda:
     logger.debug("flash: bootstub version is %s", self.get_version())
 
     # do flash
-    Panda.flash_static(self._handle, code, mcu_type=self._mcu_type)
+    Panda.flash_static(self._handle, code, mcu_type=McuType.H7)
 
     # reconnect
     if reconnect:
@@ -524,22 +470,22 @@ class Panda:
       dfu_list = PandaDFU.list()
     return True
 
-  @staticmethod
-  def wait_for_panda(serial: str | None, timeout: int) -> bool:
+  @classmethod
+  def wait_for_panda(cls, serial: str | None, timeout: int) -> bool:
     t_start = time.monotonic()
-    serials = Panda.list()
+    serials = cls.list()
     while (serial is None and len(serials) == 0) or (serial is not None and serial not in serials):
       logger.debug("waiting for panda...")
       time.sleep(0.1)
       if timeout is not None and (time.monotonic() - t_start) > timeout:
         return False
-      serials = Panda.list()
+      serials = cls.list()
     return True
 
   def up_to_date(self, fn=None) -> bool:
     current = self.get_signature()
     if fn is None:
-      fn = os.path.join(FW_PATH, self.get_mcu_type().config.app_fn)
+      fn = os.path.join(FW_PATH, McuType.H7.config.app_fn)
     expected = Panda.get_signature_from_firmware(fn)
     return (current == expected)
 
@@ -574,11 +520,10 @@ class Panda:
       "interrupt_load": a[18],
       "fan_power": a[19],
       "safety_rx_checks_invalid": a[20],
-      "spi_checksum_error_count": a[21],
-      "fan_stall_count": a[22],
-      "sbu1_voltage_mV": a[23],
-      "sbu2_voltage_mV": a[24],
-      "som_reset_triggered": a[25],
+      "spi_error_count": a[21],
+      "sbu1_voltage_mV": a[22],
+      "sbu2_voltage_mV": a[23],
+      "som_reset_triggered": a[24],
     }
 
   @ensure_can_health_packet_version
@@ -641,13 +586,7 @@ class Panda:
     return bytes(part_1 + part_2)
 
   def get_type(self):
-    ret = self._handle.controlRead(Panda.REQUEST_IN, 0xc1, 0, 0, 0x40)
-
-    # old bootstubs don't implement this endpoint, see comment in Panda.device
-    if self._bcd_hw_type is not None and (ret is None or len(ret) != 1):
-      ret = self._bcd_hw_type
-
-    return ret
+    return self._handle.controlRead(Panda.REQUEST_IN, 0xc1, 0, 0, 0x40)
 
   # Returns tuple with health packet version and CAN packet/USB packet version
   def get_packets_versions(self):
@@ -657,22 +596,6 @@ class Panda:
       return (a[0], a[1], a[2])
     else:
       return (0, 0, 0)
-
-  def get_mcu_type(self) -> McuType:
-    hw_type = self.get_type()
-    if hw_type in Panda.F4_DEVICES:
-      return McuType.F4
-    elif hw_type in Panda.H7_DEVICES:
-      return McuType.H7
-    else:
-      # have to assume F4, see comment in Panda.connect
-      if self._assume_f4_mcu:
-        return McuType.F4
-
-    raise ValueError(f"unknown HW type: {hw_type}")
-
-  def has_obd(self):
-    return self.get_type() in Panda.HAS_OBD
 
   def is_internal(self):
     return self.get_type() in Panda.INTERNAL_DEVICES
@@ -694,7 +617,7 @@ class Panda:
     return self._serial
 
   def get_dfu_serial(self):
-    return PandaDFU.st_serial_to_dfu_serial(self._serial, self._mcu_type)
+    return PandaDFU.st_serial_to_dfu_serial(self._serial, McuType.H7)
 
   def get_uid(self):
     """
@@ -717,6 +640,9 @@ class Panda:
 
   def set_power_save(self, power_save_enabled=0):
     self._handle.controlWrite(Panda.REQUEST_OUT, 0xe7, int(power_save_enabled), 0, b'')
+
+  def enter_stop_mode(self):
+    self._handle.controlWrite(Panda.REQUEST_OUT, 0xb5, 0, 0, b'', expect_disconnect=True)
 
   def set_safety_mode(self, mode=CarParams.SafetyModel.silent, param=0):
     self._handle.controlWrite(Panda.REQUEST_OUT, 0xdc, mode, param, b'')
@@ -766,7 +692,7 @@ class Panda:
 
   @ensure_can_packet_version
   def can_send_many(self, arr, *, fd=False, timeout=CAN_SEND_TIMEOUT_MS):
-    snds = pack_can_buffer(arr, fd=fd)
+    snds = pack_can_buffer(arr, chunk=(not self.spi), fd=fd)
     for tx in snds:
       while len(tx) > 0:
         bs = self._handle.bulkWrite(3, tx, timeout=timeout)
@@ -801,14 +727,14 @@ class Panda:
 
   # ******************* serial *******************
 
-  def serial_read(self, port_number):
-    ret = []
+  def serial_read(self, port_number, maxlen=1024):
+    ret = b''
     while 1:
-      lret = bytes(self._handle.controlRead(Panda.REQUEST_IN, 0xe0, port_number, 0, 0x40))
-      if len(lret) == 0:
+      r = bytes(self._handle.controlRead(Panda.REQUEST_IN, 0xe0, port_number, 0, 0x40))
+      if len(r) == 0 or len(ret) >= maxlen:
         break
-      ret.append(lret)
-    return b''.join(ret)
+      ret += r
+    return ret
 
   def serial_write(self, port_number, ln):
     ret = 0
@@ -817,16 +743,6 @@ class Panda:
     for i in range(0, len(ln), 0x20):
       ret += self._handle.bulkWrite(2, struct.pack("B", port_number) + ln[i:i + 0x20])
     return ret
-
-  def serial_clear(self, port_number):
-    """Clears all messages (tx and rx) from the specified internal uart
-    ringbuffer as though it were drained.
-
-    Args:
-      port_number (int): port number of the uart to clear.
-
-    """
-    self._handle.controlWrite(Panda.REQUEST_OUT, 0xf2, port_number, 0, b'')
 
   def send_heartbeat(self, engaged=True):
     self._handle.controlWrite(Panda.REQUEST_OUT, 0xf3, engaged, 0, b'')
@@ -859,8 +775,6 @@ class Panda:
     self._handle.controlWrite(Panda.REQUEST_OUT, 0xf6, int(enabled), 0, b'')
 
   # ****************** Debug *****************
-  def set_green_led(self, enabled):
-    self._handle.controlWrite(Panda.REQUEST_OUT, 0xf7, int(enabled), 0, b'')
 
   # arr: timer period
   # ccrN: channel N pulse length

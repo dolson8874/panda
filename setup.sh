@@ -8,15 +8,19 @@ PLATFORM=$(uname -s)
 
 echo "installing dependencies"
 if [[ $PLATFORM == "Darwin" ]]; then
-  export HOMEBREW_NO_AUTO_UPDATE=1
-  brew install --cask gcc-arm-embedded
-  brew install python3 gcc@13
+  # pass
+  :
 elif [[ $PLATFORM == "Linux" ]]; then
+  # for AGNOS since we clear the apt lists
+  if [[ ! -d /"var/lib/apt/" ]]; then
+    sudo apt update
+  fi
+
   sudo apt-get install -y --no-install-recommends \
-    curl \
-    make g++ git libnewlib-arm-none-eabi \
+    curl ca-certificates \
+    make g++ git \
     libusb-1.0-0 \
-    gcc-arm-none-eabi python3-pip python3-venv python3-dev
+    python3-dev python3-pip python3-venv
 else
   echo "WARNING: unsupported platform. skipping apt/brew install."
 fi
@@ -32,5 +36,5 @@ if ! command -v uv &>/dev/null; then
 fi
 
 export UV_PROJECT_ENVIRONMENT="$DIR/.venv"
-uv sync --all-extras
+uv sync --all-extras --upgrade
 source "$DIR/.venv/bin/activate"
