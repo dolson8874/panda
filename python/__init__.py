@@ -219,7 +219,7 @@ class Panda:
     # use default speed dolson
     # LANDROVER CAN1 800kbps
     # set CAN speed
-    for bus in range(PANDA_BUS_CNT):
+    for bus in range(PANDA_CAN_CNT):
       if bus == 1:
         self.set_can_speed_kbps(bus, 800)
       else:
