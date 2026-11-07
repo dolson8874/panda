@@ -1,3 +1,5 @@
+#pragma once
+
 #include "board/sys/sys.h"
 
 // WARNING: To stay in compliance with the SIL2 rules laid out in STM UM2331, we should never use any of the available hardware low power modes during safety function execution.
@@ -53,6 +55,9 @@ void set_power_save_state(bool enable) {
 }
 
 static void enter_stop_mode(void) {
+  // the SPI CS interrupt shares an IRQ with the FDCAN3 RX wakeup line, and doesn't clear its pending bit
+  NVIC_DisableIRQ(EXTI15_10_IRQn);
+
   // set all GPIO to analog mode to reduce power, analog mode also disables pull resistors
   register_set(&(GPIOA->MODER), 0xFFFFFFFFU, 0xFFFFFFFFU);
   register_set(&(GPIOB->MODER), 0xFFFFFFFFU, 0xFFFFFFFFU);
@@ -74,6 +79,12 @@ static void enter_stop_mode(void) {
   ADC1->CR |= ADC_CR_DEEPPWD;
   ADC2->CR &= ~(ADC_CR_ADEN);
   ADC2->CR |= ADC_CR_DEEPPWD;
+
+  // disable DTS
+  register_clear_bits(&(DTS->CFGR1), DTS_CFGR1_TS1_START);
+  register_clear_bits(&(DTS->CFGR1), DTS_CFGR1_TS1_EN);
+  register_set(&(DTS->CFGR1), 0U, (DTS_CFGR1_TS1_SMP_TIME_Msk | DTS_CFGR1_REFCLK_SEL_Msk | DTS_CFGR1_Q_MEAS_OPT_Msk | DTS_CFGR1_HSREF_CLK_DIV_Msk | DTS_CFGR1_TS1_INTRIG_SEL_Msk));
+  RCC->APB4ENR &= ~(RCC_APB4ENR_DTSEN);
 
   // disable HSI48: 48 MHz USB clock
   register_clear_bits(&(RCC->CR), RCC_CR_HSI48ON);
@@ -110,6 +121,9 @@ static void enter_stop_mode(void) {
   register_set_bits(&(EXTI->IMR1), can_exti_line);
   register_set_bits(&(EXTI->FTSR1), can_exti_line);
 
+  // don't wake up on SPI chip select (EXTI11, shares an IRQ with FDCAN3 RX)
+  register_clear_bits(&(EXTI->IMR1), (1UL << 11));
+
   // clear pending EXTI
   EXTI->PR1 = (1U << 1) | (1U << 4) | can_exti_line;
 
@@ -142,6 +156,7 @@ static void enter_stop_mode(void) {
 
   __DSB();
   __ISB();
+  // cppcheck-suppress misra-c2012-17.3 ; CMSIS __WFI macro expands to inline asm
   __WFI();
 
   NVIC_SystemReset();

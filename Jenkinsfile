@@ -1,17 +1,3 @@
-def docker_run(String step_label, int timeout_mins, String cmd) {
-  timeout(time: timeout_mins, unit: 'MINUTES') {
-    sh script: "docker run --rm --privileged \
-          --env PYTHONWARNINGS=error \
-          --volume /dev/bus/usb:/dev/bus/usb \
-          --volume /var/run/dbus:/var/run/dbus \
-          --net host \
-          ${env.DOCKER_IMAGE_TAG} \
-          bash -c 'scons && ${cmd}'", \
-        label: step_label
-  }
-}
-
-
 def phone(String ip, String step_label, String cmd) {
   withCredentials([file(credentialsId: 'id_rsa', variable: 'key_file')]) {
     def ssh_cmd = """
@@ -30,10 +16,13 @@ export TEST_DIR=${env.TEST_DIR}
 export SOURCE_DIR=${env.SOURCE_DIR}
 export GIT_BRANCH=${env.GIT_BRANCH}
 export GIT_COMMIT=${env.GIT_COMMIT}
-export PYTHONPATH=${env.TEST_DIR}/../
 export PYTHONWARNINGS=error
 export LOGLEVEL=debug
-ln -sf /data/openpilot/opendbc_repo/opendbc /data/opendbc
+
+unset PYTHONPATH
+if [ -f "${env.TEST_DIR}/.venv/bin/activate" ]; then
+  source "${env.TEST_DIR}/.venv/bin/activate"
+fi
 
 # TODO: this is an agnos issue
 export PYTEST_ADDOPTS="-p no:asyncio"
@@ -70,12 +59,12 @@ pipeline {
   environment {
     CI = "1"
     PYTHONWARNINGS= "error"
-    DOCKER_IMAGE_TAG = "panda:build-${env.GIT_COMMIT}"
 
     TEST_DIR = "/data/panda"
     SOURCE_DIR = "/data/panda_source/"
   }
   options {
+    skipDefaultCheckout()
     timeout(time: 3, unit: 'HOURS')
     disableConcurrentBuilds(abortPrevious: env.BRANCH_NAME != 'master')
   }
@@ -86,20 +75,30 @@ pipeline {
         lock(resource: "pandas")
       }
       stages {
-        stage('Build Docker Image') {
+        stage('Setup') {
           steps {
             timeout(time: 20, unit: 'MINUTES') {
+              deleteDir()
               script {
-                dockerImage = docker.build("${env.DOCKER_IMAGE_TAG}", "--build-arg CACHEBUST=${env.GIT_COMMIT} .")
+                def revision = checkout scm
+                env.GIT_COMMIT = revision.GIT_COMMIT
+                env.GIT_BRANCH = revision.GIT_BRANCH
               }
+              sh 'PYTHONWARNINGS=default ./setup.sh'
             }
           }
         }
-        stage('jungle tests') {
+        stage('reset hardware') {
           steps {
             script {
               retry (3) {
-                docker_run("reset hardware", 3, "python3 ./tests/hitl/reset_jungles.py")
+                timeout(time: 3, unit: 'MINUTES') {
+                  sh script: """#!/usr/bin/env bash
+set -e
+source .venv/bin/activate
+python3 ./tests/hitl/reset_jungles.py
+""", label: "reset hardware"
+                }
               }
             }
           }
@@ -108,25 +107,23 @@ pipeline {
         stage('parallel tests') {
           parallel {
             stage('test cuatro') {
-              agent { docker { image 'ghcr.io/commaai/alpine-ssh'; args '--user=root' } }
+              agent { docker { image 'ghcr.io/commaai/alpine-ssh'; args '--user=root'; reuseNode true } }
               steps {
                 phone_steps("panda-cuatro", [
                   ["build", "scons"],
                   ["flash", "cd scripts/ && ./reflash_internal_panda.py"],
-                  ["flash jungle", "cd board/jungle && ./flash.py --all"],
-                  ["test", "cd tests/hitl && pytest -o 'addopts=' --durations=0 2*.py [5-9]*.py"],
+                  ["test", "cd tests/hitl && HITL=1 python -m unittest -v test_2*.py test_[5-9]*.py"],
                 ])
               }
             }
 
             stage('test tres') {
-              agent { docker { image 'ghcr.io/commaai/alpine-ssh'; args '--user=root' } }
+              agent { docker { image 'ghcr.io/commaai/alpine-ssh'; args '--user=root'; reuseNode true } }
               steps {
                 phone_steps("panda-tres", [
                   ["build", "scons"],
                   ["flash", "cd scripts/ && ./reflash_internal_panda.py"],
-                  ["flash jungle", "cd board/jungle && ./flash.py --all"],
-                  ["test", "cd tests/hitl && pytest -o 'addopts=' --durations=0 2*.py [5-9]*.py"],
+                  ["test", "cd tests/hitl && HITL=1 python -m unittest -v test_2*.py test_[5-9]*.py"],
                 ])
               }
             }
@@ -134,6 +131,11 @@ pipeline {
           }
         }
       }
+    }
+  }
+  post {
+    always {
+      deleteDir()
     }
   }
 }
