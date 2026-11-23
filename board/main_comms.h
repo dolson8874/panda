@@ -286,7 +286,11 @@ int comms_control_handler(ControlPacket_t *req, uint8_t *resp) {
         heartbeat_lost = false;
         heartbeat_disabled = false;
         heartbeat_engaged = (req->param1 == 1U);
-        heartbeat_engaged_mads = (req->param2 == 1U);
+        if ((current_safety_mode == SAFETY_LANDROVER) && landrover_rr_mads) {
+          landrover_rr_receive_heartbeat(req->param2 == 1U);
+        } else {
+          heartbeat_engaged_mads = (req->param2 == 1U);
+        }
         break;
       }
     // **** 0xf6: set siren enabled
