@@ -5,6 +5,8 @@
 #include "board/crc.h"
 #ifdef STM32H7
 #include "board/stm32h7/lladc_declarations.h"
+#elif defined(STM32F4)
+#include "board/stm32f4/lladc_declarations.h"
 #endif
 
 // ******************** bootkick ********************
@@ -110,6 +112,12 @@ extern FDCAN_GlobalTypeDef *cans[PANDA_CAN_CNT];
 #define CAN_ACK_ERROR 3U
 
 void can_clear_send(FDCAN_GlobalTypeDef *FDCANx, uint8_t can_number);
+#elif defined(STM32F4)
+extern CAN_TypeDef *cans[PANDA_CAN_CNT];
+void can_clear_send(CAN_TypeDef *CANx, uint8_t can_number);
+#endif
+
+#if defined(STM32H7) || defined(STM32F4)
 void update_can_health_pkt(uint8_t can_number, uint32_t ir_reg);
 
 
@@ -176,7 +184,7 @@ void handle_interrupt(IRQn_Type irq_type);
 void interrupt_timer_handler(void);
 void init_interrupts(bool check_rate_limit);
 
-#endif // STM32H7
+#endif // STM32H7 or STM32F4
 
 // ******************** registers ********************
 

@@ -1,7 +1,7 @@
 #pragma once
 
-// from the linker script
-#define APP_START_ADDRESS 0x8020000U
+// App start shared by the linker, signature verification and USB flashing.
+extern uint32_t _app_start[];
 
 // flasher state variables
 uint32_t *prog_ptr = NULL;
@@ -33,7 +33,7 @@ int comms_control_handler(ControlPacket_t *req, uint8_t *resp) {
       }
       led_set(LED_GREEN, 1);
       unlocked = true;
-      prog_ptr = (uint32_t *)APP_START_ADDRESS;
+      prog_ptr = _app_start;
       break;
     // **** 0xb2: erase sector
     case 0xb2:
@@ -132,10 +132,12 @@ void soft_flasher_start(void) {
 
   // enable comms
   usb_init();
+#ifdef STM32H7
   if (current_board->has_spi) {
     gpio_spi_init();
     spi_init();
   }
+#endif
 
   // green LED on for flashing
   led_set(LED_GREEN, 1);

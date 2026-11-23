@@ -27,9 +27,6 @@ void fail(void) {
   soft_flasher_start();
 }
 
-// know where to sig check
-extern void *_app_start[];
-
 int main(void) {
   // Init interrupt table
   init_interrupts(true);
@@ -46,7 +43,12 @@ int main(void) {
 
   // validate length
   int len = (int)_app_start[0];
-  if ((len < 8) || (len > (0x1000000 - 0x4000 - 4 - RSANUMBYTES))) goto fail;
+#ifdef STM32F4
+  const int max_app_len = 0x08100000U - (uint32_t)_app_start - RSANUMBYTES;
+#else
+  const int max_app_len = 0x1000000 - 0x4000 - 4 - RSANUMBYTES;
+#endif
+  if ((len < 8) || (len > max_app_len)) goto fail;
 
   // compute SHA hash
   uint8_t digest[SHA_DIGEST_SIZE];

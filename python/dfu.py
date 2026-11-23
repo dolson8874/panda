@@ -1,7 +1,6 @@
 import os
 import usb1
 import struct
-import binascii
 
 from .base import BaseSTBootloaderHandle
 from .spi import STBootloaderSPIHandle, PandaSpiException
@@ -10,14 +9,18 @@ from .constants import FW_PATH, McuType
 
 
 class PandaDFU:
-  def __init__(self, dfu_serial: str | None):
+  def __init__(self, dfu_serial: str | None, usb_port: tuple[int, tuple[int, ...]] | None = None):
     # try USB, then SPI
     handle: BaseSTBootloaderHandle | None
-    self._context, handle = PandaDFU.usb_connect(dfu_serial)
-    if handle is None:
+    self._context, handle = PandaDFU.usb_connect(dfu_serial, usb_port=usb_port)
+    if handle is None and usb_port is None:
+      if self._context is not None:
+        self._context.close()
       self._context, handle = PandaDFU.spi_connect(dfu_serial)
 
     if handle is None:
+      if self._context is not None:
+        self._context.close()
       raise Exception(f"failed to open DFU device {dfu_serial}")
 
     self._handle: BaseSTBootloaderHandle = handle
@@ -37,11 +40,13 @@ class PandaDFU:
         self._context.close()
 
   @staticmethod
-  def usb_connect(dfu_serial: str | None):
+  def usb_connect(dfu_serial: str | None, usb_port=None):
     handle = None
     context = usb1.USBContext()
     context.open()
     for device in context.getDeviceList(skip_on_error=True):
+      if usb_port is not None and (device.getBusNumber(), tuple(device.getPortNumberList())) != usb_port:
+        continue
       if device.getVendorID() == 0x0483 and device.getProductID() == 0xdf11:
         try:
           this_dfu_serial = device.open().getASCIIStringDescriptor(3)
@@ -71,11 +76,13 @@ class PandaDFU:
     return None, handle
 
   @staticmethod
-  def usb_list() -> list[str]:
+  def usb_list(usb_port=None) -> list[str]:
     dfu_serials = []
     try:
       with usb1.USBContext() as context:
         for device in context.getDeviceList(skip_on_error=True):
+          if usb_port is not None and (device.getBusNumber(), tuple(device.getPortNumberList())) != usb_port:
+            continue
           if device.getVendorID() == 0x0483 and device.getProductID() == 0xdf11:
             try:
               dfu_serials.append(device.open().getASCIIStringDescriptor(3))
@@ -102,8 +109,9 @@ class PandaDFU:
       return None
     try:
       uid_base = struct.unpack("H" * 6, bytes.fromhex(st))
-      if mcu_type == McuType.H7:
-        return binascii.hexlify(struct.pack("!HHH", uid_base[1] + uid_base[5], uid_base[0] + uid_base[4], uid_base[3])).upper().decode("utf-8")
+      offset = 0xA if mcu_type == McuType.F4 else 0
+      serial = struct.pack("!HHH", (uid_base[1] + uid_base[5]) & 0xFFFF, (uid_base[0] + uid_base[4] + offset) & 0xFFFF, uid_base[3])
+      return serial.hex().upper()
     except struct.error:
       return None
 

@@ -54,6 +54,7 @@ void set_power_save_state(bool enable) {
   }
 }
 
+#ifdef STM32H7
 static void enter_stop_mode(void) {
   // the SPI CS interrupt shares an IRQ with the FDCAN3 RX wakeup line, and doesn't clear its pending bit
   NVIC_DisableIRQ(EXTI15_10_IRQn);
@@ -161,3 +162,4 @@ static void enter_stop_mode(void) {
 
   NVIC_SystemReset();
 }
+#endif

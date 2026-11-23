@@ -33,7 +33,11 @@ static int get_health_pkt(void *dat) {
   health->safety_param_pkt = current_safety_param;
   health->alternative_experience_pkt = alternative_experience;
 
+#ifdef STM32H7
   health->spi_error_count_pkt = spi_error_count;
+#else
+  health->spi_error_count_pkt = 0U;
+#endif
 
   health->fault_status_pkt = fault_status;
   health->faults_pkt = faults;
@@ -46,10 +50,15 @@ static int get_health_pkt(void *dat) {
   health->sbu1_voltage_mV = harness.sbu1_voltage_mV;
   health->sbu2_voltage_mV = harness.sbu2_voltage_mV;
 
+#ifdef STM32H7
   health->sound_output_level_pkt = sound_output_level;
 
   float temperature_encoded = (CLAMP(dts_get_temperature(), -40.0f, 214.5f) + 40.0f) + 0.5f;
   health->temperature_pkt = (uint8_t)temperature_encoded;
+#else
+  health->sound_output_level_pkt = 0U;
+  health->temperature_pkt = 0U;
+#endif
 
   health->controls_allowed_sp_pkt = (uint8_t)(((controls_allowed || controls_allowed_lateral) ? 1U : 0U) | (controls_allowed ? 2U : 0U));
 
@@ -91,7 +100,7 @@ int comms_control_handler(ControlPacket_t *req, uint8_t *resp) {
       resp_len = 2;
       break;
     // **** 0xb5: request deep sleep, wakes on CAN or SBU
-    #ifdef ALLOW_DEBUG
+    #if defined(ALLOW_DEBUG) && defined(STM32H7)
     case 0xb5:
       set_safety_mode(SAFETY_SILENT, 0U);
       set_power_save_state(true);
@@ -264,7 +273,11 @@ int comms_control_handler(ControlPacket_t *req, uint8_t *resp) {
       break;
     // **** 0xe8: set can-fd auto swithing mode
     case 0xe8:
-      bus_config[req->param1].canfd_auto = req->param2 > 0U;
+#ifdef STM32H7
+      if (req->param1 < PANDA_CAN_CNT) {
+        bus_config[req->param1].canfd_auto = req->param2 > 0U;
+      }
+#endif
       break;
     // **** 0xf1: Clear CAN ring buffer.
     case 0xf1:
@@ -303,6 +316,7 @@ int comms_control_handler(ControlPacket_t *req, uint8_t *resp) {
         heartbeat_disabled = true;
       }
       break;
+    #ifdef STM32H7
     // **** 0xf9: set CAN FD data bitrate
     case 0xf9:
       if ((req->param1 < PANDA_CAN_CNT) &&
@@ -322,6 +336,7 @@ int comms_control_handler(ControlPacket_t *req, uint8_t *resp) {
         UNUSED(ret);
       }
       break;
+    #endif
     default:
       print("NO HANDLER ");
       puth(req->request);

@@ -16,7 +16,11 @@
 
 #include "board/drivers/can_common.h"
 
+#ifdef STM32F4
+#include "board/drivers/bxcan.h"
+#else
 #include "board/drivers/fdcan.h"
+#endif
 
 #include "board/sys/power_saving.h"
 
@@ -125,7 +129,9 @@ static void tick_handler(void) {
     fan_tick();
     harness_tick();
     simple_watchdog_kick();
+#ifdef STM32H7
     sound_tick();
+#endif
 
     if (relay_malfunction_prev != relay_malfunction) {
       if (relay_malfunction) {
@@ -272,7 +278,9 @@ int main(void) {
   led_set(LED_RED, true);
   led_set(LED_GREEN, true);
   adc_init(ADC1);
+#ifdef STM32H7
   dts_init();
+#endif
 
   // print hello
   print("\n\n\n************************ MAIN START ************************\n");
@@ -315,10 +323,12 @@ int main(void) {
   // enable USB (right before interrupts or enum can fail!)
   usb_init();
 
+#ifdef STM32H7
   if (current_board->has_spi) {
     gpio_spi_init();
     spi_init();
   }
+#endif
 
   led_set(LED_RED, false);
   led_set(LED_GREEN, false);
@@ -337,7 +347,7 @@ int main(void) {
 
   // LED should keep on blinking all the time
   while (true) {
-    #ifdef ALLOW_DEBUG
+    #if defined(ALLOW_DEBUG) && defined(STM32H7)
     if (stop_mode_requested) {
       enter_stop_mode();
     }
@@ -358,11 +368,13 @@ int main(void) {
         delay((MAX_LED_FADE - fade) >> 4);
       }
     } else {
+      #ifdef STM32H7
       if ((hw_type == HW_TYPE_CUATRO) && !current_board->read_som_gpio()) {
         assert_fatal(current_safety_mode == SAFETY_SILENT, "Error: Entering low power mode while not in SAFETY_SILENT. Hanging\n");
         enter_stop_mode(); // deep sleep, wakes on CAN or SBU activity
         assert_fatal(false, "Error: enter_stop_mode returned after system reset. Hanging\n");
       }
+      #endif
       // cppcheck-suppress misra-c2012-17.3 ; CMSIS __WFI macro expands to inline asm
       __WFI();
       SCB->SCR &= ~SCB_SCR_SLEEPDEEP_Msk;

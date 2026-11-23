@@ -129,6 +129,7 @@ class Panda:
 
   # from https://github.com/commaai/openpilot/blob/103b4df18cbc38f4129555ab8b15824d1a672bdf/cereal/log.capnp#L648
   HW_TYPE_UNKNOWN = b'\x00'
+  HW_TYPE_DOS = b'\x06'
   HW_TYPE_RED_PANDA = b'\x07'
   HW_TYPE_TRES = b'\x09'
   HW_TYPE_CUATRO = b'\x0a'
@@ -150,16 +151,18 @@ class Panda:
   HEALTH_FLAG_HARDFAULT_RESET = 1 << 8
 
   H7_DEVICES = [HW_TYPE_RED_PANDA, HW_TYPE_TRES, HW_TYPE_CUATRO, HW_TYPE_BODY]
-  SUPPORTED_DEVICES = H7_DEVICES
+  SUPPORTED_DEVICES = [HW_TYPE_DOS, *H7_DEVICES]
 
-  INTERNAL_DEVICES = (HW_TYPE_TRES, HW_TYPE_CUATRO)
+  INTERNAL_DEVICES = (HW_TYPE_DOS, HW_TYPE_TRES, HW_TYPE_CUATRO)
 
   HARNESS_STATUS_NC = 0
   HARNESS_STATUS_NORMAL = 1
   HARNESS_STATUS_FLIPPED = 2
 
-  def __init__(self, serial: str | None = None, claim: bool = True, disable_checks: bool = True, can_speed_kbps: int = 500, cli: bool = True):
+  def __init__(self, serial: str | None = None, claim: bool = True, disable_checks: bool = True, can_speed_kbps: int = 500, cli: bool = True,
+               usb_port: tuple[int, tuple[int, ...]] | None = None):
     self._disable_checks = disable_checks
+    self._usb_port = usb_port
 
     self._handle: BaseHandle
     self._handle_open = False
@@ -215,10 +218,10 @@ class Panda:
     self._handle = None
     while self._handle is None:
       # try USB first, then SPI
-      self._context, self._handle, serial, self.bootstub = self.usb_connect(self._connect_serial, claim=claim, no_error=wait)
-      if self._handle is None:
+      self._context, self._handle, serial, self.bootstub = self.usb_connect(self._connect_serial, claim=claim, no_error=wait, usb_port=self._usb_port)
+      if self._handle is None and self._usb_port is None:
         self._context, self._handle, serial, self.bootstub = self.spi_connect(self._connect_serial)
-      if not wait:
+      if not wait or self._usb_port is not None:
         break
 
     if self._handle is None:
@@ -277,12 +280,14 @@ class Panda:
     return None, handle, spi_serial, bootstub
 
   @classmethod
-  def usb_connect(cls, serial, claim=True, no_error=False):
+  def usb_connect(cls, serial, claim=True, no_error=False, usb_port=None):
     handle, usb_serial, bootstub = None, None, None
     context = usb1.USBContext()
     context.open()
     try:
       for device in context.getDeviceList(skip_on_error=True):
+        if usb_port is not None and (device.getBusNumber(), tuple(device.getPortNumberList())) != usb_port:
+          continue
         if device.getVendorID() in cls.USB_VIDS and device.getProductID() in cls.USB_PIDS:
           try:
             this_serial = device.getSerialNumber()
@@ -330,11 +335,13 @@ class Panda:
     return list(set(ret))
 
   @classmethod
-  def usb_list(cls):
+  def usb_list(cls, usb_port=None):
     ret = []
     try:
       with usb1.USBContext() as context:
         for device in context.getDeviceList(skip_on_error=True):
+          if usb_port is not None and (device.getBusNumber(), tuple(device.getPortNumberList())) != usb_port:
+            continue
           if device.getVendorID() in cls.USB_VIDS and device.getProductID() in cls.USB_PIDS:
             try:
               serial = device.getSerialNumber()
@@ -440,12 +447,13 @@ class Panda:
   def flash(self, fn=None, code=None, reconnect=True):
     assert (hw_type := self.get_type()) in self.SUPPORTED_DEVICES, f"Unknown HW: {hw_type}"
 
+    mcu_type = self.get_mcu_type()
     if self.up_to_date(fn=fn):
       logger.info("flash: already up to date")
       return
 
     if not fn:
-      fn = os.path.join(FW_PATH, McuType.H7.config.app_fn)
+      fn = os.path.join(FW_PATH, self.get_mcu_type().config.app_fn)
     assert os.path.isfile(fn)
     logger.debug("flash: main version is %s", self.get_version())
     if not self.bootstub:
@@ -460,7 +468,7 @@ class Panda:
     logger.debug("flash: bootstub version is %s", self.get_version())
 
     # do flash
-    Panda.flash_static(self._handle, code, mcu_type=McuType.H7)
+    Panda.flash_static(self._handle, code, mcu_type=mcu_type)
 
     # reconnect
     if reconnect:
@@ -511,7 +519,7 @@ class Panda:
   def up_to_date(self, fn=None) -> bool:
     current = self.get_signature()
     if fn is None:
-      fn = os.path.join(FW_PATH, McuType.H7.config.app_fn)
+      fn = os.path.join(FW_PATH, self.get_mcu_type().config.app_fn)
     expected = Panda.get_signature_from_firmware(fn)
     return (current == expected)
 
@@ -621,6 +629,14 @@ class Panda:
   def get_type(self):
     return self._handle.controlRead(Panda.REQUEST_IN, 0xc1, 0, 0, 0x40)
 
+  def get_mcu_type(self) -> McuType:
+    hw_type = self.get_type()
+    if hw_type == self.HW_TYPE_DOS:
+      return McuType.F4
+    if hw_type in self.H7_DEVICES:
+      return McuType.H7
+    raise PandaProtocolMismatch(f"Unknown Panda hardware type: {hw_type!r}")
+
   def get_packets_versions(self):
     dat = self._handle.controlRead(Panda.REQUEST_IN, 0xdd, 0, 0, 8)
     if dat and len(dat) == 8:
@@ -647,7 +663,7 @@ class Panda:
     return self._serial
 
   def get_dfu_serial(self):
-    return PandaDFU.st_serial_to_dfu_serial(self._serial, McuType.H7)
+    return PandaDFU.st_serial_to_dfu_serial(self._serial, self.get_mcu_type())
 
   def get_uid(self):
     """
