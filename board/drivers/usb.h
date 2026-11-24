@@ -439,7 +439,7 @@ static void usb_setup(void) {
                                USB_OTG_DOEPCTL_SD0PID_SEVNFRM | USB_OTG_DOEPCTL_USBAEP;
       USBx_OUTEP(2U)->DOEPINT = 0xFF;
 
-      USBx_OUTEP(3U)->DOEPTSIZ = (32UL << 19) | 0x800U;
+      USBx_OUTEP(3U)->DOEPTSIZ = (USB_CAN_OUT_PACKET_COUNT << 19) | (USB_CAN_OUT_PACKET_COUNT * USBPACKET_MAX_SIZE);
       USBx_OUTEP(3U)->DOEPCTL = (0x40U & USB_OTG_DOEPCTL_MPSIZ) | (2UL << 18) |
                                USB_OTG_DOEPCTL_SD0PID_SEVNFRM | USB_OTG_DOEPCTL_USBAEP;
       USBx_OUTEP(3U)->DOEPINT = 0xFF;
@@ -746,7 +746,7 @@ void usb_irqhandler(void) {
 void can_tx_comms_resume_usb(void) {
   ENTER_CRITICAL();
   if (!outep3_processing && (USBx_OUTEP(3U)->DOEPCTL & USB_OTG_DOEPCTL_NAKSTS) != 0U) {
-    USBx_OUTEP(3U)->DOEPTSIZ = (32UL << 19) | 0x800U;
+    USBx_OUTEP(3U)->DOEPTSIZ = (USB_CAN_OUT_PACKET_COUNT << 19) | (USB_CAN_OUT_PACKET_COUNT * USBPACKET_MAX_SIZE);
     USBx_OUTEP(3U)->DOEPCTL |= USB_OTG_DOEPCTL_EPENA | USB_OTG_DOEPCTL_CNAK;
   }
   EXIT_CRITICAL();

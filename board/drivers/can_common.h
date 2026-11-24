@@ -15,13 +15,14 @@ bool can_loopback = false;
 
 // ********************* instantiate queues *********************
 #define can_buffer(x, size) \
-  static CANPacket_t elems_##x[size]; \
+  static can_queue_slot elems_##x[size]; \
   extern can_ring can_##x; \
-  can_ring can_##x = { .w_ptr = 0, .r_ptr = 0, .fifo_size = (size), .elems = (CANPacket_t *)&(elems_##x) };
+  can_ring can_##x = { .w_ptr = 0, .r_ptr = 0, .fifo_size = (size), .elems = elems_##x };
 
 #ifdef STM32F4
-#define CAN_RX_BUFFER_SIZE 512U
-#define CAN_TX_BUFFER_SIZE 64U
+#define CAN_RX_BUFFER_SIZE 2048U
+#define CAN_TX_BUFFER_SIZE 128U
+_Static_assert(CAN_TX_BUFFER_SIZE > MAX_CAN_MSGS_PER_USB_BULK_TRANSFER, "F4 TX queue cannot reserve a USB OUT window");
 #else
 #define CAN_RX_BUFFER_SIZE 4096U
 #define CAN_TX_BUFFER_SIZE 416U
@@ -49,7 +50,13 @@ bool can_pop(can_ring *q, CANPacket_t *elem) {
 
   ENTER_CRITICAL();
   if (q->w_ptr != q->r_ptr) {
+#ifdef STM32F4
+    // The queue stores the Classic CAN wire prefix, including the flags and checksum.
+    *elem = (CANPacket_t){0};
+    (void)memcpy(elem, q->elems[q->r_ptr].bytes, sizeof(q->elems[q->r_ptr].bytes));
+#else
     *elem = q->elems[q->r_ptr];
+#endif
     if ((q->r_ptr + 1U) == q->fifo_size) {
       q->r_ptr = 0;
     } else {
@@ -63,6 +70,11 @@ bool can_pop(can_ring *q, CANPacket_t *elem) {
 }
 
 bool can_push(can_ring *q, const CANPacket_t *elem) {
+#ifdef STM32F4
+  if ((elem->fd != 0U) || (elem->data_len_code > CAN_CLASSIC_DATA_SIZE)) {
+    return false;
+  }
+#endif
   bool ret = false;
   uint32_t next_w_ptr;
 
@@ -73,7 +85,11 @@ bool can_push(can_ring *q, const CANPacket_t *elem) {
     next_w_ptr = q->w_ptr + 1U;
   }
   if (next_w_ptr != q->r_ptr) {
+#ifdef STM32F4
+    (void)memcpy(q->elems[q->w_ptr].bytes, elem, sizeof(q->elems[q->w_ptr].bytes));
+#else
     q->elems[q->w_ptr] = *elem;
+#endif
     q->w_ptr = next_w_ptr;
     ret = true;
   }
@@ -167,11 +183,14 @@ bool can_check_checksum(CANPacket_t *packet) {
 }
 
 void can_send(CANPacket_t *to_push, uint8_t bus_number, bool skip_tx_hook) {
-  bool supported_frame = true;
 #ifdef STM32F4
-  supported_frame = (to_push->fd == 0U) && (to_push->data_len_code <= 8U);
+  // A Classic CAN board cannot transmit or echo a rejected CAN FD frame.
+  if ((to_push->fd != 0U) || (to_push->data_len_code > CAN_CLASSIC_DATA_SIZE)) {
+    safety_tx_blocked += 1U;
+    return;
+  }
 #endif
-  if (supported_frame && (skip_tx_hook || (safety_tx_hook(to_push) != 0))) {
+  if (skip_tx_hook || (safety_tx_hook(to_push) != 0)) {
     if (bus_number < PANDA_CAN_CNT) {
       // add CAN packet to send queue
       tx_buffer_overflow += can_push(can_queues[bus_number], to_push) ? 0U : 1U;

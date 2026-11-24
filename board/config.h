@@ -4,7 +4,14 @@
 
 #define CAN_INIT_TIMEOUT_MS 500U
 #define USBPACKET_MAX_SIZE 0x40U
-#define MAX_CAN_MSGS_PER_USB_BULK_TRANSFER 51U
+#if defined(STM32F4) && !defined(BOOTSTUB)
+  #define USB_CAN_OUT_PACKET_COUNT 4U
+  // Six bytes per minimum frame, including a possible frame continued from the previous window.
+  #define MAX_CAN_MSGS_PER_USB_BULK_TRANSFER ((USB_CAN_OUT_PACKET_COUNT * USBPACKET_MAX_SIZE + CANPACKET_HEAD_SIZE - 1U) / CANPACKET_HEAD_SIZE)
+#else
+  #define USB_CAN_OUT_PACKET_COUNT 32U
+  #define MAX_CAN_MSGS_PER_USB_BULK_TRANSFER 51U
+#endif
 #define MAX_CAN_MSGS_PER_SPI_BULK_TRANSFER 170U
 
 // USB definitions

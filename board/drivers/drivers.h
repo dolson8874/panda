@@ -17,11 +17,21 @@ void bootkick_tick(bool ignition, bool recent_heartbeat);
 
 // ******************** can_common ********************
 
+#ifdef STM32F4
+#define CAN_CLASSIC_DATA_SIZE 8U
+typedef struct {
+  uint8_t bytes[CANPACKET_HEAD_SIZE + CAN_CLASSIC_DATA_SIZE];
+} __attribute__((aligned(4))) can_queue_slot;
+_Static_assert(sizeof(can_queue_slot) == 16U, "Unexpected F4 CAN queue slot size");
+#else
+typedef CANPacket_t can_queue_slot;
+#endif
+
 typedef struct {
   volatile uint32_t w_ptr;
   volatile uint32_t r_ptr;
   uint32_t fifo_size;
-  CANPacket_t *elems;
+  can_queue_slot *elems;
 } can_ring;
 
 typedef struct {
